@@ -61,9 +61,9 @@ bool graph_loader(graph_type& graph, const std::string& fname, const std::string
 	cout << "line:" << line << endl;
 	cout << "vid:" << vid << endl;
 	
-	float ivalue;
+	float ivalue = 0.0;
 
-	strm >> ivalue;
+	//strm >> ivalue;
 
 	// insert this web page
 	graph.add_vertex(vid, vertex_data(vid, ivalue, 0));
@@ -77,11 +77,14 @@ bool graph_loader(graph_type& graph, const std::string& fname, const std::string
 	while(cnt > 0){
 		graphlab::vertex_id_type other_vid;
 	    	strm >> other_vid;
-		strm >> vs;
+		//strm >> vs;
 		
 		
-		cout << "other_vid" << other_vid << endl;
-		cout << "vs: " << vs << endl;
+		cout << "vid: " << vid 
+		     << " other_vid: " << other_vid 
+		     << " vs: " << vs 
+		     << " vr: " << vr
+		     << " va: " << va << endl;
 		
 		graph.add_edge(vid, other_vid, edge_data(vs, vr, va));
 		cnt--;
@@ -101,11 +104,18 @@ private:
 public:
 	edge_dir_type gather_edges(icontext_type& context, 
 				   const vertex_type& vertex) const { 
-		//cout << "vertex: " << vertex.data().vertex_id << " ALL_EDGES: " << graphlab::ALL_EDGES << endl;
-		//cout << "vertex: " << vertex.data().vertex_id << " IN_EDGES: " << graphlab::IN_EDGES << endl;
-		//cout << "vertex: " << vertex.data().vertex_id << " OUT_EDGES: " << graphlab::OUT_EDGES << endl;
-
-		return graphlab::IN_EDGES; 
+		/*
+		cout << "vertex: " << vertex.data().vertex_id << " ALL_EDGES: " << graphlab::ALL_EDGES << endl;
+		cout << "vertex: " << vertex.data().vertex_id << " IN_EDGES: " << graphlab::IN_EDGES << endl;
+		cout << "vertex: " << vertex.data().vertex_id << " OUT_EDGES: " << graphlab::OUT_EDGES << endl;
+		
+		if(!perform_scatter) {
+			cout << "graphlab::NO_EDGES" << endl;	
+			return graphlab::NO_EDGES;
+		}
+		*/
+		cout << "graphlab::IN_EDGES" << endl;
+		return graphlab::IN_EDGES;
 	} // end of gather_edges 
 
 	float gather(icontext_type& context, const vertex_type& vertex,
@@ -114,7 +124,8 @@ public:
 		//cout << "vertex_id: " << edge.source().data().vertex_id << endl;
 		//cout << "similarity: " << edge.source().data().s << endl;
 
-		return 1.0; 				
+		//return edge.data().s; 				
+		return 1.0;
 	}
 
 	void apply(icontext_type& context, vertex_type& vertex, 
@@ -122,23 +133,38 @@ public:
 		//cout << "vertex_id: " << vertex.data().vertex_id << endl;
 		cout << "total: " << total << endl;
 		vertex.data().s = total;
-		//perform_scatter = (vertex.data().s < 1);					 
-		perform_scatter = true;
+	
+		perform_scatter = (vertex.data().s < 1);					 
+		cout << "perform_scatter: " << perform_scatter << endl;
+
+		//perform_scatter = true;
+	
 	}
 	
 	
 	edge_dir_type scatter_edges(icontext_type& context,
 				    const vertex_type& vertex) const {
-		if (perform_scatter)
+		
+		if (perform_scatter) {
+			cout << "return out edges" << endl;
 			return graphlab::OUT_EDGES;
-		else
+		}
+		else {
+			cout << "return no edges" << endl;
 			return graphlab::NO_EDGES;
+		}
+		
 	}
 	
 	
+	// for each vertex do scatter...
 	void scatter(icontext_type& context, const vertex_type& vertex,
 		     edge_type& edge) const {
-		context.signal(edge.target()); 	     
+		if (perform_scatter) { 
+			cout << "signal edge.target() -------=-------- " << endl;
+
+			context.signal(edge.target()); 	     
+		}
 	}
 	
 };
@@ -188,7 +214,11 @@ int main(int argc, char** argv) {
 	engine.signal_all();
 	graphlab::timer timer;
 	engine.start();
-	graphlab::mpi_tools::finalize();
+
+	// @irwenqiang, because of this line, I spend a total afternoon to
+	// figure out the bug! 
+	// stupid!..
+	// graphlab::mpi_tools::finalize();
 	
 	const double runtime = timer.current_time();
 	dc.cout() 
