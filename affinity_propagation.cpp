@@ -1,6 +1,7 @@
 #include <string>
 #include <vector>
 #include <iostream>
+#include <limits>
 #include <graphlab.hpp>
 #include <boost/spirit/include/qi.hpp>  
 #include <boost/spirit/include/phoenix_core.hpp>    
@@ -11,6 +12,22 @@
 using namespace std;
 
 /*
+ *This is the message exchange between vertexs
+ */
+struct center_msg : public graphlab::IS_POD_TYPE {
+
+	int target_vertex;
+	//0: max(a(i, k') + s(i, k')),	s.t. k'!= k
+	float max_value;
+	//min(0, r(k, k) + sum(max(0, r(i', k))))	s.t. i'!= i
+	float min_value;
+
+	center_msg() {}
+	explicit center_msg(int tv, float max, float min): target_vertex(tv), max_value(max), min_value(min) {}
+	
+};
+
+/*
  *Vertex_data_type:
  *vertex_id:int
  *similirity s:float
@@ -18,11 +35,10 @@ using namespace std;
 struct vertex_data : public graphlab::IS_POD_TYPE {
 
 	int vertex_id;
-	float s;
-	float r;
-	float a;
-	vertex_data():vertex_id(1),s(0.0),r(0.0),a(0.0) { }
-	explicit vertex_data(int id, float is, float ir, float ia):vertex_id(id), s(is), r(ir), a(ia) { }
+	std::vector<center_msg> msg;
+
+	vertex_data() { }
+	explicit vertex_data(int id):vertex_id(id) { }
 
 };
 
@@ -65,14 +81,10 @@ bool graph_loader(graph_type& graph, const std::string& fname, const std::string
 	cout << "vid:" << vid << endl;
 	
 	float ivalue = 0.0;
-	float ir = 0.0;
-	float ia = 0.0;
 
 	strm >> ivalue;
 
-
-	// insert this web page
-	graph.add_vertex(vid, vertex_data(vid, ivalue, ir, ia));
+	graph.add_vertex(vid, vertex_data(vid));
 
 	// while there are elements in the line, continue to read until we fai	
 	float vs;
@@ -166,28 +178,27 @@ public:
 	} // end of gather_edges 
 
 	gather_type gather(icontext_type& context, const vertex_type& vertex, edge_type& edge) const {
+
+		set_union_gather gather;
+
 		int type = 0;
 		int source = edge.source().data().vertex_id;
 		int target = edge.target().data().vertex_id;
 		float value = edge.data().s;
-		set_union_gather gather;
 				
+		gather.messages.push_back(message(type, source, target, value));
+		
+		type = 1;
+		value = edge.data().r;
+		gather.messages.push_back(message(type, source, target, value));
+
+		type = 2;
+		value = edge.data().a;
+
 		gather.messages.push_back(message(type, source, target, value));
 
 		return gather;
 	}
-
-	/*
-	float gather(icontext_type& context, const vertex_type& vertex,
-		     edge_type& edge) const {
-		//edge.source().data().pagerank
-		//cout << "vertex_id: " << edge.source().data().vertex_id << endl;
-		//cout << "similarity: " << edge.source().data().s << endl;
-
-		//return edge.data().s; 				
-		return 1.0;
-	}
-	*/
 
 	void apply(icontext_type& context, vertex_type& vertex, 
 		  const gather_type& total) {
@@ -197,23 +208,49 @@ public:
 		cout << "=====-----=====" << endl;
 		cout << "center: " << center << endl;
 		
-		// sum(max(0, r(i', k))) i' != k
-		float sum = 0.0;
-		float zero = 0.0;	
-		for (unsigned int i = 0; i < total.messages.size(); i++){
-			cout << total.messages[i].type << " " << total.messages[i].source_vertex << " " << total.messages[i].target_vertex << " " << total.messages[i].value << endl;
-			if(center != total.messages[i].source_vertex && total.messages[i].type == 2) {
-				sum += std::max(zero, total.messages[i].value);
-			}
+		/*
+		 * The target vertexs of current center
+		 */
+		std::set<int> target_vertexs;
 
+		// find the target vertexs
+		for (unsigned int i = 0; i < total.messages.size(); i++) {
+			cout << total.messages[i].type << " " 
+			     << total.messages[i].source_vertex << " " 
+			     << total.messages[i].target_vertex << " " 
+			     << total.messages[i].value << endl;
+
+			if (vertex.data().vertex_id == total.messages[i].source_vertex)	
+				target_vertexs.insert(total.messages[i].target_vertex);
 
 		}
 
+		// sum(max(0, r(i', k))) i' != k
+		float sum = 0.0;
+		float zero = 0.0;	
+
+		for (set<int>::const_iterator iter = target_vertexs.begin(); 
+			iter != target_vertexs.end(); 
+			++iter) {
+			float max = numeric_limits<float>::min();
+			cout << "minnnn: " << max << endl;
 		
+			for (unsigned int i = 0; i < total.messages.size(); i++){
+				
+				if (total.messages[i].target_vertex == center 
+					&& total.messages[i].source_vertex != *iter) {			
+					// TOFIX
+					if (total.messages[i].type == 0);
+				}
+			
+			}
+			
+		}
+
 		cout << "total: " << total.messages[0].value << endl;
-		vertex.data().s = sum;
+		//vertex.data().s = sum;
 	
-		perform_scatter = (vertex.data().s < 1);					 
+		//perform_scatter = (vertex.data().s < 1);					 
 		perform_scatter = false;
 		cout << "perform_scatter: " << perform_scatter << endl;
 	
@@ -256,7 +293,9 @@ struct affinity_propagation_writer {
 	std::string save_vertex(const graph_type::vertex_type& v) {
 
 		std::stringstream strm;
-		strm << v.data().vertex_id << "\t" << v.data().s << "\n";
+		//strm << v.data().vertex_id << "\t" << v.data().s << "\n";
+		strm << v.data().vertex_id << "\n";
+
 		return strm.str();
 	}
 
