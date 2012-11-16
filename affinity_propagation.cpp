@@ -19,8 +19,10 @@ struct vertex_data : public graphlab::IS_POD_TYPE {
 
 	int vertex_id;
 	float s;
-	vertex_data():vertex_id(1),s(0.0) { }
-	explicit vertex_data(int id, float is):vertex_id(id), s(is) { }
+	float r;
+	float a;
+	vertex_data():vertex_id(1),s(0.0),r(0.0),a(0.0) { }
+	explicit vertex_data(int id, float is, float ir, float ia):vertex_id(id), s(is), r(ir), a(ia) { }
 
 };
 
@@ -63,19 +65,31 @@ bool graph_loader(graph_type& graph, const std::string& fname, const std::string
 	cout << "vid:" << vid << endl;
 	
 	float ivalue = 0.0;
+	float ir = 0.0;
+	float ia = 0.0;
 
 	strm >> ivalue;
 
+
 	// insert this web page
-	graph.add_vertex(vid, vertex_data(vid, ivalue));
+	graph.add_vertex(vid, vertex_data(vid, ivalue, ir, ia));
 
 	// while there are elements in the line, continue to read until we fai	
 	float vs;
 	float vr = 0.0;
 	float va = 0.0;
 	
-	while(true){
-		if (strm.fail()) break;
+	int neighbor_num = 0;
+	strm >> neighbor_num;
+	//neighbor_num++;
+	while(neighbor_num){
+		
+		neighbor_num--;
+		if (strm.fail()) {
+			cout << "strm read fail..." << endl;
+			break;
+		}
+
 		graphlab::vertex_id_type other_vid;
 	    	strm >> other_vid;
 		strm >> vs;
@@ -100,14 +114,14 @@ bool graph_loader(graph_type& graph, const std::string& fname, const std::string
  */
 struct message : public graphlab::IS_POD_TYPE {
 	// r, a , s
-	char type;
+	int type;
 	int source_vertex;
 	int target_vertex;
 
 	float value;
 
 	message() {}
-	explicit message(char vtype, int sv, int tv, float vvalue): type(vtype), source_vertex(sv), target_vertex(tv), value(vvalue) {}
+	explicit message(int vtype, int sv, int tv, float vvalue): type(vtype), source_vertex(sv), target_vertex(tv), value(vvalue) {}
 	
 };
 
@@ -148,14 +162,17 @@ public:
 		cout << "vertex: " << vertex.data().vertex_id << " OUT_EDGES: " << graphlab::OUT_EDGES << endl;		
 		*/
 		cout << "graphlab::IN_EDGES" << endl;
-		return graphlab::IN_EDGES;
+		return graphlab::ALL_EDGES;
 	} // end of gather_edges 
 
 	gather_type gather(icontext_type& context, const vertex_type& vertex, edge_type& edge) const {
-	
+		int type = 0;
+		int source = edge.source().data().vertex_id;
+		int target = edge.target().data().vertex_id;
+		float value = edge.data().s;
 		set_union_gather gather;
-		message msg;
-		gather.messages.push_back(msg);
+				
+		gather.messages.push_back(message(type, source, target, value));
 
 		return gather;
 	}
@@ -175,10 +192,29 @@ public:
 	void apply(icontext_type& context, vertex_type& vertex, 
 		  const gather_type& total) {
 		//cout << "vertex_id: " << vertex.data().vertex_id << endl;
+
+		int center = vertex.data().vertex_id;
+		cout << "=====-----=====" << endl;
+		cout << "center: " << center << endl;
+		
+		// sum(max(0, r(i', k))) i' != k
+		float sum = 0.0;
+		float zero = 0.0;	
+		for (unsigned int i = 0; i < total.messages.size(); i++){
+			cout << total.messages[i].type << " " << total.messages[i].source_vertex << " " << total.messages[i].target_vertex << " " << total.messages[i].value << endl;
+			if(center != total.messages[i].source_vertex && total.messages[i].type == 2) {
+				sum += std::max(zero, total.messages[i].value);
+			}
+
+
+		}
+
+		
 		cout << "total: " << total.messages[0].value << endl;
-		vertex.data().s = total.messages[0].value;
+		vertex.data().s = sum;
 	
 		perform_scatter = (vertex.data().s < 1);					 
+		perform_scatter = false;
 		cout << "perform_scatter: " << perform_scatter << endl;
 	
 	}
