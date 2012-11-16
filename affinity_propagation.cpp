@@ -16,11 +16,11 @@ using namespace std;
  *similirity s:float
  */
 struct vertex_data : public graphlab::IS_POD_TYPE {
+
 	int vertex_id;
 	float s;
-	int counter;
-	vertex_data():vertex_id(1),s(0.0),counter(0) { }
-	explicit vertex_data(int id, float is, int counter):vertex_id(id), s(is), counter(0) { }
+	vertex_data():vertex_id(1),s(0.0) { }
+	explicit vertex_data(int id, float is):vertex_id(id), s(is) { }
 
 };
 
@@ -30,6 +30,7 @@ struct vertex_data : public graphlab::IS_POD_TYPE {
  *responsibility r:vector<float>
  *avaliability   a:vector<float>
  */
+
 struct edge_data : public graphlab::IS_POD_TYPE {
 
 	float s;
@@ -63,21 +64,21 @@ bool graph_loader(graph_type& graph, const std::string& fname, const std::string
 	
 	float ivalue = 0.0;
 
-	//strm >> ivalue;
+	strm >> ivalue;
 
 	// insert this web page
-	graph.add_vertex(vid, vertex_data(vid, ivalue, 0));
+	graph.add_vertex(vid, vertex_data(vid, ivalue));
 
 	// while there are elements in the line, continue to read until we fai	
 	float vs;
 	float vr = 0.0;
 	float va = 0.0;
 	
-	int cnt = 2;
-	while(cnt > 0){
+	while(true){
+		if (strm.fail()) break;
 		graphlab::vertex_id_type other_vid;
 	    	strm >> other_vid;
-		//strm >> vs;
+		strm >> vs;
 		
 		
 		cout << "vid: " << vid 
@@ -87,14 +88,53 @@ bool graph_loader(graph_type& graph, const std::string& fname, const std::string
 		     << " va: " << va << endl;
 		
 		graph.add_edge(vid, other_vid, edge_data(vs, vr, va));
-		cnt--;
+
 	}
 	
 	return true;
 };
 
+
+/*
+ *This is the message exchange between vertexs
+ */
+struct message : public graphlab::IS_POD_TYPE {
+	// r, a , s
+	char type;
+	int source_vertex;
+	int target_vertex;
+
+	float value;
+
+	message() {}
+	explicit message(char vtype, int sv, int tv, float vvalue): type(vtype), source_vertex(sv), target_vertex(tv), value(vvalue) {}
+	
+};
+
+
+/*
+ *This is the gathering type which "accumulates" the a(i, k), s(i, k) and r(,k )
+ */
+
+struct set_union_gather : public graphlab::IS_POD_TYPE {
+
+	std::vector<message> messages;
+	
+	/*
+	 * Combining with another collection of vertices
+	 * union it into the current set,
+	 */
+	
+	set_union_gather& operator+=(const set_union_gather& other) {
+		
+		for (unsigned int i = 0; i < other.messages.size(); i++)
+			messages.push_back(other.messages[i]);	
+		return *this;
+	}
+};
+
 class affinity_propagation :
-	public graphlab::ivertex_program<graph_type, float>,
+	public graphlab::ivertex_program<graph_type, set_union_gather>,
 	public graphlab::IS_POD_TYPE {
 
 private:
@@ -105,19 +145,22 @@ public:
 	edge_dir_type gather_edges(icontext_type& context, 
 				   const vertex_type& vertex) const { 
 		/*
-		cout << "vertex: " << vertex.data().vertex_id << " ALL_EDGES: " << graphlab::ALL_EDGES << endl;
-		cout << "vertex: " << vertex.data().vertex_id << " IN_EDGES: " << graphlab::IN_EDGES << endl;
-		cout << "vertex: " << vertex.data().vertex_id << " OUT_EDGES: " << graphlab::OUT_EDGES << endl;
-		
-		if(!perform_scatter) {
-			cout << "graphlab::NO_EDGES" << endl;	
-			return graphlab::NO_EDGES;
-		}
+		cout << "vertex: " << vertex.data().vertex_id << " OUT_EDGES: " << graphlab::OUT_EDGES << endl;		
 		*/
 		cout << "graphlab::IN_EDGES" << endl;
 		return graphlab::IN_EDGES;
 	} // end of gather_edges 
 
+	gather_type gather(icontext_type& context, const vertex_type& vertex, edge_type& edge) const {
+	
+		set_union_gather gather;
+		message msg;
+		gather.messages.push_back(msg);
+
+		return gather;
+	}
+
+	/*
 	float gather(icontext_type& context, const vertex_type& vertex,
 		     edge_type& edge) const {
 		//edge.source().data().pagerank
@@ -127,21 +170,19 @@ public:
 		//return edge.data().s; 				
 		return 1.0;
 	}
+	*/
 
 	void apply(icontext_type& context, vertex_type& vertex, 
 		  const gather_type& total) {
 		//cout << "vertex_id: " << vertex.data().vertex_id << endl;
-		cout << "total: " << total << endl;
-		vertex.data().s = total;
+		cout << "total: " << total.messages[0].value << endl;
+		vertex.data().s = total.messages[0].value;
 	
 		perform_scatter = (vertex.data().s < 1);					 
 		cout << "perform_scatter: " << perform_scatter << endl;
-
-		//perform_scatter = true;
 	
 	}
-	
-	
+		
 	edge_dir_type scatter_edges(icontext_type& context,
 				    const vertex_type& vertex) const {
 		
@@ -203,10 +244,9 @@ int main(int argc, char** argv) {
 
 	graph_type graph(dc);
 	
-	graph.load("graph.txt", graph_loader);
+	graph.load("ap_graph.txt", graph_loader);
 
 	graph.finalize();
-
 
 	typedef graphlab::omni_engine<affinity_propagation> engine_type;
 
