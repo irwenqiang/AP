@@ -2,6 +2,7 @@
 #include <vector>
 #include <iostream>
 #include <limits>
+#include <algorithm>
 #include <graphlab.hpp>
 #include <boost/spirit/include/qi.hpp>  
 #include <boost/spirit/include/phoenix_core.hpp>    
@@ -10,6 +11,9 @@
 #include <boost/unordered_set.hpp>
 
 using namespace std;
+
+float former_maxk;
+bool perform_scatter;
 
 /*
  *This is the message exchange between vertexs
@@ -36,9 +40,13 @@ struct vertex_data : public graphlab::IS_POD_TYPE {
 
 	int vertex_id;
 	std::vector<center_msg> msg;
+	
+	float s;
+	float r;
+	float a;
 
 	vertex_data() { }
-	explicit vertex_data(int id):vertex_id(id) { }
+	explicit vertex_data(int id, float fs, float fr, float fa):vertex_id(id), s(fs), r(fr), a(fa) { }
 
 };
 
@@ -84,7 +92,7 @@ bool graph_loader(graph_type& graph, const std::string& fname, const std::string
 
 	strm >> ivalue;
 
-	graph.add_vertex(vid, vertex_data(vid));
+	graph.add_vertex(vid, vertex_data(vid, ivalue, 0.0, 0.0));
 
 	// while there are elements in the line, continue to read until we fai	
 	float vs;
@@ -125,16 +133,17 @@ bool graph_loader(graph_type& graph, const std::string& fname, const std::string
  *This is the message exchange between vertexs
  */
 struct message : public graphlab::IS_POD_TYPE {
-	// r, a , s
-	int type;
-	int source_vertex;
-	int target_vertex;
+	
+	float s;
+	float r;
+	float a;
 
-	float value;
+	int source;
+	int target;
+
 
 	message() {}
-	explicit message(int vtype, int sv, int tv, float vvalue): type(vtype), source_vertex(sv), target_vertex(tv), value(vvalue) {}
-	
+	explicit message(float fs, float fr, float fa, int sv, int tv): s(fs), r(fr), a(fa), source(sv), target(tv) {}
 };
 
 
@@ -145,7 +154,7 @@ struct message : public graphlab::IS_POD_TYPE {
 struct set_union_gather : public graphlab::IS_POD_TYPE {
 
 	std::vector<message> messages;
-	
+	float maxk;
 	/*
 	 * Combining with another collection of vertices
 	 * union it into the current set,
@@ -153,8 +162,10 @@ struct set_union_gather : public graphlab::IS_POD_TYPE {
 	
 	set_union_gather& operator+=(const set_union_gather& other) {
 		
-		for (unsigned int i = 0; i < other.messages.size(); i++)
+		for (unsigned int i = 0; i < other.messages.size(); i++) {
 			messages.push_back(other.messages[i]);	
+			maxk += (other.messages[i].a + other.messages[i].r);
+		}
 		return *this;
 	}
 };
@@ -165,7 +176,7 @@ class affinity_propagation :
 
 private:
 	// a variable local to this program
-	bool perform_scatter;
+	bool perform_scatter2;
 	
 public:
 	edge_dir_type gather_edges(icontext_type& context, 
@@ -181,21 +192,14 @@ public:
 
 		set_union_gather gather;
 
-		int type = 0;
-		int source = edge.source().data().vertex_id;
-		int target = edge.target().data().vertex_id;
-		float value = edge.data().s;
+		float fs = edge.data().s;
+		float fr = edge.data().r;
+		float fa = edge.data().a;
 				
-		gather.messages.push_back(message(type, source, target, value));
-		
-		type = 1;
-		value = edge.data().r;
-		gather.messages.push_back(message(type, source, target, value));
+		int sv = edge.source().data().vertex_id;
+		int tv = edge.target().data().vertex_id;
 
-		type = 2;
-		value = edge.data().a;
-
-		gather.messages.push_back(message(type, source, target, value));
+		gather.messages.push_back(message(fs, fr, fa, sv, tv));
 
 		return gather;
 	}
@@ -212,45 +216,57 @@ public:
 		 * The target vertexs of current center
 		 */
 		std::set<int> target_vertexs;
+		std::set<int> source_vertexs;
+
+		float maxk = total.maxk;
 
 		// find the target vertexs
 		for (unsigned int i = 0; i < total.messages.size(); i++) {
-			cout << total.messages[i].type << " " 
-			     << total.messages[i].source_vertex << " " 
-			     << total.messages[i].target_vertex << " " 
-			     << total.messages[i].value << endl;
+			cout << total.messages[i].s << " "
+			     << total.messages[i].r << " "
+			     << total.messages[i].a << " "
+			     << total.messages[i].source << " " 
+			     << total.messages[i].target << endl; 
 
-			if (vertex.data().vertex_id == total.messages[i].source_vertex)	
-				target_vertexs.insert(total.messages[i].target_vertex);
+			if (vertex.data().vertex_id == total.messages[i].source)	
+				target_vertexs.insert(total.messages[i].target);
+
+			if (vertex.data().vertex_id == total.messages[i].target)
+				source_vertexs.insert(total.messages[i].source);
 
 		}
 
-		// sum(max(0, r(i', k))) i' != k
-		float sum = 0.0;
-		float zero = 0.0;	
+		former_maxk = maxk;
 
 		for (set<int>::const_iterator iter = target_vertexs.begin(); 
 			iter != target_vertexs.end(); 
 			++iter) {
-			float max = numeric_limits<float>::min();
-			cout << "minnnn: " << max << endl;
 		
+			float max_as = numeric_limits<float>::min();
+			float sum_max_r = 0.0;
+			float min_r = numeric_limits<float>::min();
+
 			for (unsigned int i = 0; i < total.messages.size(); i++){
 				
-				if (total.messages[i].target_vertex == center 
-					&& total.messages[i].source_vertex != *iter) {			
-					// TOFIX
-					if (total.messages[i].type == 0);
-				}
+				if (total.messages[i].target == center 
+					&& total.messages[i].source != *iter){
+					
+					if (total.messages[i].a + total.messages[i].s < max_as)
+						max_as = total.messages[i].a + total.messages[i].s;
+
+					if (total.messages[i].r > 0)
+						sum_max_r += total.messages[i].r;
+				}					
 			
 			}
-			
+
+			//TOFIX
+			min_r = vertex.data().r + sum_max_r;
+	
+			vertex.data().msg.push_back(center_msg(*iter, max_as, min_r));			
+			vertex.data().a = sum_max_r;
 		}
 
-		cout << "total: " << total.messages[0].value << endl;
-		//vertex.data().s = sum;
-	
-		//perform_scatter = (vertex.data().s < 1);					 
 		perform_scatter = false;
 		cout << "perform_scatter: " << perform_scatter << endl;
 	
@@ -274,6 +290,26 @@ public:
 	// for each vertex do scatter...
 	void scatter(icontext_type& context, const vertex_type& vertex,
 		     edge_type& edge) const {
+		
+		float maxk = 0.0;
+		float zero = 0.0;
+		for (vector<center_msg>::const_iterator iter = vertex.data().msg.begin(); 
+			iter != vertex.data().msg.end(); 
+			++iter) {
+			if (edge.source().data().vertex_id == vertex.data().vertex_id) {
+				if (edge.target().data().vertex_id == (*iter).target_vertex)
+					edge.data().r = edge.data().s - (*iter).max_value;
+			}
+			if (edge.target().data().vertex_id == vertex.data().vertex_id) {
+				if (edge.target().data().vertex_id == (*iter).target_vertex)
+					edge.data().a = std::min(zero, (*iter).min_value);
+			}
+
+			maxk += (edge.data().r + edge.data().a);
+
+		}
+
+		perform_scatter = ((maxk - former_maxk) > 1E-2) ? true : false;
 		if (perform_scatter) { 
 			cout << "signal edge.target() -------=-------- " << endl;
 
