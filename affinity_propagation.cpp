@@ -14,21 +14,22 @@ using namespace std;
 
 float former_maxk;
 bool perform_scatter;
+float tolerance = 10;
+// float, optional, default: 0.5
+// Damping factor between 0.5 and 1.
+float damping = 0.5;
+bool isMax = false;
 
-/*
- *This is the message exchange between vertexs
- */
 struct center_msg : public graphlab::IS_POD_TYPE {
 
 	int target_vertex;
-	//0: max(a(i, k') + s(i, k')),	s.t. k'!= k
+	//max(a(i, k') + s(i, k')),	s.t. k'!= k
 	float max_value;
 	//min(0, r(k, k) + sum(max(0, r(i', k))))	s.t. i'!= i
 	float min_value;
 
 	center_msg() {}
-	explicit center_msg(int tv, float max, float min): target_vertex(tv), max_value(max), min_value(min) {}
-	
+	explicit center_msg(int tv, float max, float min): target_vertex(tv), max_value(max), min_value(min) {}	
 };
 
 /*
@@ -44,9 +45,10 @@ struct vertex_data : public graphlab::IS_POD_TYPE {
 	float s;
 	float r;
 	float a;
+	int count;
 
 	vertex_data() { }
-	explicit vertex_data(int id, float fs, float fr, float fa):vertex_id(id), s(fs), r(fr), a(fa) { }
+	explicit vertex_data(int id, float fs, float fr, float fa):vertex_id(id), s(fs), r(fr), a(fa), count(0) { }
 
 };
 
@@ -85,23 +87,21 @@ bool graph_loader(graph_type& graph, const std::string& fname, const std::string
 	// first entry in the line is a vertex ID
 	strm >> vid;
 
-	cout << "line:" << line << endl;
-	cout << "vid:" << vid << endl;
-	
 	float ivalue = 0.0;
 
 	strm >> ivalue;
 
 	graph.add_vertex(vid, vertex_data(vid, ivalue, 0.0, 0.0));
 
-	// while there are elements in the line, continue to read until we fai	
 	float vs;
 	float vr = 0.0;
 	float va = 0.0;
 	
 	int neighbor_num = 0;
+
 	strm >> neighbor_num;
-	//neighbor_num++;
+
+	// while there are elements in the line, continue to read until we fail	
 	while(neighbor_num){
 		
 		neighbor_num--;
@@ -113,21 +113,13 @@ bool graph_loader(graph_type& graph, const std::string& fname, const std::string
 		graphlab::vertex_id_type other_vid;
 	    	strm >> other_vid;
 		strm >> vs;
-		
-		
-		cout << "vid: " << vid 
-		     << " other_vid: " << other_vid 
-		     << " vs: " << vs 
-		     << " vr: " << vr
-		     << " va: " << va << endl;
-		
+
 		graph.add_edge(vid, other_vid, edge_data(vs, vr, va));
 
 	}
 	
 	return true;
 };
-
 
 /*
  *This is the message exchange between vertexs
@@ -154,8 +146,12 @@ struct message : public graphlab::IS_POD_TYPE {
 struct set_union_gather : public graphlab::IS_POD_TYPE {
 
 	std::vector<message> messages;
+
+	// accumulate the what? @irwenqiang
 	float maxk;
 	/*
+	 * Override the +=/sum operator in the pharse between 
+	 * gather and apply:
 	 * Combining with another collection of vertices
 	 * union it into the current set,
 	 */
@@ -174,20 +170,22 @@ class affinity_propagation :
 	public graphlab::ivertex_program<graph_type, set_union_gather>,
 	public graphlab::IS_POD_TYPE {
 
-private:
-	// a variable local to this program
-	bool perform_scatter2;
-	
 public:
 	edge_dir_type gather_edges(icontext_type& context, 
 				   const vertex_type& vertex) const { 
-		/*
-		cout << "vertex: " << vertex.data().vertex_id << " OUT_EDGES: " << graphlab::OUT_EDGES << endl;		
-		*/
-		cout << "graphlab::IN_EDGES" << endl;
-		return graphlab::ALL_EDGES;
-	} // end of gather_edges 
 
+		// currently, just consider handling the all edges,
+		// the optimization will be taked in to account lately.
+		// @irwenqiang
+
+		// v2: the in edges will be enough
+		return graphlab::IN_EDGES;
+	}
+
+	/**
+	 * gather all the edges that have connnections to the current vertex,i.e. 
+	 * the center
+	 */
 	gather_type gather(icontext_type& context, const vertex_type& vertex, edge_type& edge) const {
 
 		set_union_gather gather;
@@ -204,54 +202,55 @@ public:
 		return gather;
 	}
 
+	/**
+	 * According the signal of the apply function,
+	 * this apply pharse operates on the the current vertex,
+	 * that is operating on the center
+	 */
 	void apply(icontext_type& context, vertex_type& vertex, 
 		  const gather_type& total) {
-		//cout << "vertex_id: " << vertex.data().vertex_id << endl;
+
+		vertex.data().count++;
+
+		if (vertex.data().count > 10)
+			isMax = true;
 
 		int center = vertex.data().vertex_id;
-		cout << "=====-----=====" << endl;
-		cout << "center: " << center << endl;
-		
+				
 		/*
 		 * The target vertexs of current center
 		 */
-		std::set<int> target_vertexs;
-		std::set<int> source_vertexs;
+		std::set<int> in_vertexs;
 
 		float maxk = total.maxk;
 
 		// find the target vertexs
 		for (unsigned int i = 0; i < total.messages.size(); i++) {
-			cout << total.messages[i].s << " "
-			     << total.messages[i].r << " "
-			     << total.messages[i].a << " "
-			     << total.messages[i].source << " " 
-			     << total.messages[i].target << endl; 
 
-			if (vertex.data().vertex_id == total.messages[i].source)	
-				target_vertexs.insert(total.messages[i].target);
-
-			if (vertex.data().vertex_id == total.messages[i].target)
-				source_vertexs.insert(total.messages[i].source);
-
+			if (center == total.messages[i].target)
+				in_vertexs.insert(total.messages[i].source);
 		}
 
 		former_maxk = maxk;
 
-		for (set<int>::const_iterator iter = target_vertexs.begin(); 
-			iter != target_vertexs.end(); 
+		/**
+		 * the ground truth is that 
+		 * in the affinity propagation, firstly, consider all the link input
+		 * edges, and then, update the value of the link output edges
+		 */
+		for (set<int>::const_iterator iter = in_vertexs.begin(); 
+			iter != in_vertexs.end(); 
 			++iter) {
-		
-			float max_as = numeric_limits<float>::min();
+				
+			float max_as = -(numeric_limits<float>::max() - 2);
 			float sum_max_r = 0.0;
-			float min_r = numeric_limits<float>::min();
-
+			float min_r = -(numeric_limits<float>::max() - 2);
+			float zero = 0.0;
 			for (unsigned int i = 0; i < total.messages.size(); i++){
 				
-				if (total.messages[i].target == center 
-					&& total.messages[i].source != *iter){
+				if (total.messages[i].source != *iter){
 					
-					if (total.messages[i].a + total.messages[i].s < max_as)
+					if (total.messages[i].a + total.messages[i].s > max_as)
 						max_as = total.messages[i].a + total.messages[i].s;
 
 					if (total.messages[i].r > 0)
@@ -259,62 +258,77 @@ public:
 				}					
 			
 			}
+			
+			cout << "sum_max_r: " << sum_max_r << endl;
+			min_r  = std::min(vertex.data().r + sum_max_r, zero);
+			
 
-			//TOFIX
-			min_r = vertex.data().r + sum_max_r;
-	
+			// update the value of the vertex data in this apply pharse
+			// *iter will be the k of r(i, k)
 			vertex.data().msg.push_back(center_msg(*iter, max_as, min_r));			
+			// update the avaliablity of the vertex, according to
+			// a(k, k) = sum(max(0, r(i', k))), subject to i' != k
 			vertex.data().a = sum_max_r;
-		}
 
-		perform_scatter = false;
-		cout << "perform_scatter: " << perform_scatter << endl;
-	
+			// there's not any infomation about how to update the responsibility of the vertex k
+			// so, vertex.data().r = ?? @irwenqiang
+		}
 	}
 		
+	// what's the scatter_edges done?
+	// or
+	// what's the default operation of the scatter_edges pharse?
+	// @irwenqiang
+	
 	edge_dir_type scatter_edges(icontext_type& context,
 				    const vertex_type& vertex) const {
 		
-		if (perform_scatter) {
-			cout << "return out edges" << endl;
-			return graphlab::OUT_EDGES;
-		}
-		else {
-			cout << "return no edges" << endl;
-			return graphlab::NO_EDGES;
-		}
-		
+		return graphlab::OUT_EDGES;		
 	}
 	
-	
-	// for each vertex do scatter...
+	// It's time to update the edge_data in the scatter pharse...
 	void scatter(icontext_type& context, const vertex_type& vertex,
 		     edge_type& edge) const {
 		
 		float maxk = 0.0;
 		float zero = 0.0;
-		for (vector<center_msg>::const_iterator iter = vertex.data().msg.begin(); 
-			iter != vertex.data().msg.end(); 
-			++iter) {
-			if (edge.source().data().vertex_id == vertex.data().vertex_id) {
-				if (edge.target().data().vertex_id == (*iter).target_vertex)
-					edge.data().r = edge.data().s - (*iter).max_value;
-			}
-			if (edge.target().data().vertex_id == vertex.data().vertex_id) {
-				if (edge.target().data().vertex_id == (*iter).target_vertex)
-					edge.data().a = std::min(zero, (*iter).min_value);
+
+		float old_r = edge.data().r;
+		float old_a = edge.data().a;
+
+		// in the scatter pharse, due to arrange in the gather and, specially 
+		// in the apply pharse, we can easily update the edge datas of the center's
+		// link output edges
+		for (vector<center_msg>::const_iterator outer_iter = vertex.data().msg.begin(); 
+			outer_iter != vertex.data().msg.end(); 
+			++outer_iter) {
+			
+			if (edge.target().data().vertex_id == (*outer_iter).target_vertex) {
+				edge.data().r = edge.data().s - (*outer_iter).max_value;
+				cout << "edge.data().s: " << edge.data().s << "\t"
+				     << "max: " << (*outer_iter).max_value
+				     << endl;
+				edge.data().r = (1 - damping) * edge.data().r + damping * old_r;
+				edge.data().a = std::min(zero, (*outer_iter).min_value);
+				edge.data().a = (1 - damping) * edge.data().a + damping * old_a;
 			}
 
 			maxk += (edge.data().r + edge.data().a);
 
 		}
-
-		perform_scatter = ((maxk - former_maxk) > 1E-2) ? true : false;
-		if (perform_scatter) { 
-			cout << "signal edge.target() -------=-------- " << endl;
-
+//		perform_scatter = (std::fabs(maxk - former_maxk) < 1E-6);
+		perform_scatter = (std::fabs(std::fabs(maxk) - std::fabs(former_maxk)) < tolerance);
+		
+		if (isMax)
+			return;
+		if (!perform_scatter) { 
 			context.signal(edge.target()); 	     
 		}
+		
+		if (perform_scatter) {
+			
+		}
+
 	}
 	
 };
@@ -330,13 +344,33 @@ struct affinity_propagation_writer {
 
 		std::stringstream strm;
 		//strm << v.data().vertex_id << "\t" << v.data().s << "\n";
-		strm << v.data().vertex_id << "\n";
+		strm << v.data().vertex_id 
+		     << "\t"
+		     << v.data().s
+		     << "\t"
+		     << v.data().r
+		     << "\t"
+		     << v.data().a
+		     << endl;
 
 		return strm.str();
 	}
 
 	std::string save_edge(graph_type::edge_type e) {
-		return "";
+		std::stringstream strm;
+		strm << e.source().data().vertex_id
+		     << "\t"
+		     << e.target().data().vertex_id
+		     << "\t"
+		     << e.data().s 
+		     << "\t"
+		     << e.data().r
+		     << "\t"
+		     << e.data().a
+		     << endl;
+
+		return strm.str();
+
 	}
 };
 
@@ -353,6 +387,8 @@ int main(int argc, char** argv) {
 	std::string saveprefix;
 	clopts.attach_option("saveprefix", saveprefix, "If set, will save the examplar to a sequence of files with prefix saveprefix");
 
+	std::string tolerance;
+	clopts.attach_option("tolerance", tolerance, "the tolerance to terminate the computation");
 	graph_type graph(dc);
 	
 	graph.load("ap_graph.txt", graph_loader);
@@ -381,14 +417,16 @@ int main(int argc, char** argv) {
 	<< "Update Rate (updates/seconds): "
 	<< engine.num_updates() / runtime << endl;
 
-	/*
+	
+	saveprefix = "output";
 	if (saveprefix != ""){
+		cout << "savvvvvvvvvvvvvvvvvvvvvvvvvvveprefix" << endl;
 		graph.save(saveprefix, affinity_propagation_writer(),
 			   false,	// do not gzip
-			   true,	// save vertices
-			   false);	// do not save edges
+			   false,	// save vertices
+			   true);	// do not save edges
 	}
-	*/
+
 	graphlab::mpi_tools::finalize();
 
 	return EXIT_SUCCESS;
