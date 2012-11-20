@@ -91,7 +91,7 @@ bool graph_loader(graph_type& graph, const std::string& fname, const std::string
 
 	strm >> ivalue;
 
-	graph.add_vertex(vid, vertex_data(vid, ivalue, 0.0, 0.0));
+	graph.add_vertex(vid, vertex_data(vid, 0.0, ivalue, 0.0));
 
 	float vs;
 	float vr = 0.0;
@@ -246,6 +246,7 @@ public:
 			float sum_max_r = 0.0;
 			float min_r = -(numeric_limits<float>::max() - 2);
 			float zero = 0.0;
+
 			for (unsigned int i = 0; i < total.messages.size(); i++){
 				
 				if (total.messages[i].source != *iter){
@@ -253,25 +254,36 @@ public:
 					if (total.messages[i].a + total.messages[i].s > max_as)
 						max_as = total.messages[i].a + total.messages[i].s;
 
-					if (total.messages[i].r > 0)
+					if (total.messages[i].r > zero)
 						sum_max_r += total.messages[i].r;
 				}					
 			
 			}
 			
-			cout << "sum_max_r: " << sum_max_r << endl;
-			min_r  = std::min(vertex.data().r + sum_max_r, zero);
-			
+			min_r  = std::min(vertex.data().r + sum_max_r, zero);	
 
 			// update the value of the vertex data in this apply pharse
 			// *iter will be the k of r(i, k)
-			vertex.data().msg.push_back(center_msg(*iter, max_as, min_r));			
+			// there is something wrong here!
+			unsigned int i = 0;
+
+			bool existed_target_vertex = false;
+			for(i = 0; i < vertex.data().msg.size(); i++) {
+				if (vertex.data().msg[i].target_vertex == *iter) {
+					vertex.data().msg[i].max_value = max_as;
+					vertex.data().msg[i].min_value = min_r;
+					existed_target_vertex = true;
+					break;
+				}
+			}
+			
+			if (!existed_target_vertex) {
+				vertex.data().msg.push_back(center_msg(*iter, max_as, min_r));	
+			}
+
 			// update the avaliablity of the vertex, according to
 			// a(k, k) = sum(max(0, r(i', k))), subject to i' != k
 			vertex.data().a = sum_max_r;
-
-			// there's not any infomation about how to update the responsibility of the vertex k
-			// so, vertex.data().r = ?? @irwenqiang
 		}
 	}
 		
