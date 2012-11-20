@@ -72,7 +72,6 @@ struct edge_data : public graphlab::IS_POD_TYPE {
 
 typedef graphlab::distributed_graph<vertex_data, edge_data> graph_type;
 
-
 /*
  *The graph loader is used by graph.load to parse lines
  *of the text data file.
@@ -105,6 +104,7 @@ bool graph_loader(graph_type& graph, const std::string& fname, const std::string
 	while(neighbor_num){
 		
 		neighbor_num--;
+
 		if (strm.fail()) {
 			cout << "strm read fail..." << endl;
 			break;
@@ -119,6 +119,7 @@ bool graph_loader(graph_type& graph, const std::string& fname, const std::string
 	}
 	
 	return true;
+
 };
 
 /*
@@ -133,9 +134,9 @@ struct message : public graphlab::IS_POD_TYPE {
 	int source;
 	int target;
 
-
 	message() {}
 	explicit message(float fs, float fr, float fa, int sv, int tv): s(fs), r(fr), a(fa), source(sv), target(tv) {}
+
 };
 
 
@@ -171,6 +172,8 @@ class affinity_propagation :
 	public graphlab::IS_POD_TYPE {
 
 public:
+	static float MAX_ITER;
+
 	edge_dir_type gather_edges(icontext_type& context, 
 				   const vertex_type& vertex) const { 
 
@@ -201,7 +204,6 @@ public:
 
 		return gather;
 	}
-
 	/**
 	 * According the signal of the apply function,
 	 * this apply pharse operates on the the current vertex,
@@ -212,11 +214,10 @@ public:
 
 		vertex.data().count++;
 
-		if (vertex.data().count > 10)
+		if (vertex.data().count > 20000)
 			isMax = true;
 
-		int center = vertex.data().vertex_id;
-				
+		int center = vertex.data().vertex_id;			
 		/*
 		 * The target vertexs of current center
 		 */
@@ -256,8 +257,7 @@ public:
 
 					if (total.messages[i].r > zero)
 						sum_max_r += total.messages[i].r;
-				}					
-			
+				}						
 			}
 			
 			min_r  = std::min(vertex.data().r + sum_max_r, zero);	
@@ -317,10 +317,8 @@ public:
 			
 			if (edge.target().data().vertex_id == (*outer_iter).target_vertex) {
 				edge.data().r = edge.data().s - (*outer_iter).max_value;
-				cout << "edge.data().s: " << edge.data().s << "\t"
-				     << "max: " << (*outer_iter).max_value
-				     << endl;
 				edge.data().r = (1 - damping) * edge.data().r + damping * old_r;
+
 				edge.data().a = std::min(zero, (*outer_iter).min_value);
 				edge.data().a = (1 - damping) * edge.data().a + damping * old_a;
 			}
@@ -328,11 +326,23 @@ public:
 			maxk += (edge.data().r + edge.data().a);
 
 		}
-//		perform_scatter = (std::fabs(maxk - former_maxk) < 1E-6);
+
 		perform_scatter = (std::fabs(std::fabs(maxk) - std::fabs(former_maxk)) < tolerance);
 		
-		if (isMax)
+		if (isMax) {
+			
+			/*
+			for all xi with (r(i,i)+a(i,i) > 0)
+				xi is exemplar
+				Assign non-exemplars xj to closest exemplar
+				under similarity measure s(i,j)
+			 end;
+			*/
+			
+			if (vertex.data().r + vertex.data().a > 0)
+				cout << "responsibility: " << vertex.data().vertex_id << endl;
 			return;
+		}
 		if (!perform_scatter) { 
 			context.signal(edge.target()); 	     
 		}
@@ -340,7 +350,6 @@ public:
 		if (perform_scatter) {
 			
 		}
-
 	}
 	
 };
@@ -401,6 +410,8 @@ int main(int argc, char** argv) {
 
 	std::string tolerance;
 	clopts.attach_option("tolerance", tolerance, "the tolerance to terminate the computation");
+
+	//clopts.attach_option("max_iter", affinity_propagation::MAX_ITER, "max iterations");
 	graph_type graph(dc);
 	
 	graph.load("ap_graph.txt", graph_loader);
@@ -429,7 +440,6 @@ int main(int argc, char** argv) {
 	<< "Update Rate (updates/seconds): "
 	<< engine.num_updates() / runtime << endl;
 
-	
 	saveprefix = "output";
 	if (saveprefix != ""){
 		cout << "savvvvvvvvvvvvvvvvvvvvvvvvvvveprefix" << endl;
