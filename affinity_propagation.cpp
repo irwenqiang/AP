@@ -265,6 +265,7 @@ public:
 
 			// update the value of the vertex data in this apply pharse
 			// *iter will be the k of r(i, k)
+			// there is something wrong here! It cann't push_back into the vector again!
 			vertex.data().msg.push_back(center_msg(*iter, max_as, min_r));			
 			// update the avaliablity of the vertex, according to
 			// a(k, k) = sum(max(0, r(i', k))), subject to i' != k
@@ -401,11 +402,6 @@ int main(int argc, char** argv) {
 	engine.signal_all();
 	graphlab::timer timer;
 	engine.start();
-
-	// @irwenqiang, because of this line, I spend a total afternoon to
-	// figure out the bug! 
-	// stupid!..
-	// graphlab::mpi_tools::finalize();
 	
 	const double runtime = timer.current_time();
 	dc.cout() 
