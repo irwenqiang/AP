@@ -15,7 +15,7 @@
 
 	// float, optional, default: 0.5
 	// Damping factor between 0.5 and 1.
-	float damping = 0.5;
+	double damping = 0.5;
 	int MAX_ITER = 100;
 	string INPUT_FILE = "ap_graph.txt";
 
@@ -25,11 +25,11 @@
 	struct center_msg : public graphlab::IS_POD_TYPE {
 			
 		int target_vertex;
-		float value;
+		double value;
 
 		center_msg() {}
 
-		explicit center_msg(int a_vertex, float a_value): target_vertex(a_vertex), value(a_value) {}	
+		explicit center_msg(int a_vertex, double a_value): target_vertex(a_vertex), value(a_value) {}	
 	};
 
 	/*
@@ -53,15 +53,15 @@
 		center_msg max_value;
 		center_msg sec_max_value;
 		
-		float sum_r;
-		float s;
-		float r;
-		float a;
+		double sum_r;
+		double s;
+		double r;
+		double a;
 		
 		int count;
 
 		vertex_data() {}
-		explicit vertex_data(int id, float fs, float fr, float fa):vertex_id(id), s(fs), r(fr), a(fa), count(0), sum_r(0.0) { }
+		explicit vertex_data(int id, double fs, double fr, double fa):vertex_id(id), s(fs), r(fr), a(fa), count(0), sum_r(0.0) { }
 
 	};
 
@@ -73,12 +73,12 @@
 	 */
 	struct edge_data : public graphlab::IS_POD_TYPE {
 
-		float s;
-		float r;
-		float a;
+		double s;
+		double r;
+		double a;
 
 		edge_data(){ }
-		explicit edge_data(float vs, float vr, float va):s(vs), r(vr), a(va) { }
+		explicit edge_data(double vs, double vr, double va):s(vs), r(vr), a(va) { }
 
 	};
 
@@ -93,15 +93,15 @@
 		// first entry in the line is a vertex ID
 		strm >> vid;
 
-		float ivalue = 0.0;
+		double ivalue = 0.0;
 
 		strm >> ivalue;
 
 		graph.add_vertex(vid, vertex_data(vid, ivalue, 0.0, 0.0));
 
-		float vs;
-		float vr = 0.0;
-		float va = 0.0;
+		double vs;
+		double vr = 0.0;
+		double va = 0.0;
 		
 		int neighbor_num = 0;
 
@@ -140,23 +140,23 @@
 	struct set_union_gather : public graphlab::IS_POD_TYPE {
 
 		int target_vertex;
-		float s;
-		float r;
-		float a;
+		double s;
+		double r;
+		double a;
 		
 		center_msg max;
 		center_msg sec_max;
 
-		float sum;
+		double sum;
 		int count;
 		set_union_gather() {}
 		explicit set_union_gather(int a_source, 
-					  float a_s, 
-					  float a_r, 
-					  float a_a,
+					  double a_s, 
+					  double a_r, 
+					  double a_a,
 					  center_msg a_max,
 					  center_msg a_sec_max,
-					  float a_sum,
+					  double a_sum,
 					  int a_count): 
 			target_vertex(a_source), 
 			s(a_s), 
@@ -171,7 +171,7 @@
 		set_union_gather& operator+=(const set_union_gather& other) {
 			
 			if (count % 2 == 0){
-				float other_as = other.a + other.s;
+				double other_as = other.a + other.s;
 
 				if (other_as > max.value) {
 					sec_max.value = max.value;
@@ -190,7 +190,7 @@
 
 				return *this;
 			}else {
-				sum += std::max(float(0.0), other.r);	
+				sum += std::max(double(0.0), other.r);	
 				return *this;
 			}
 		}
@@ -219,36 +219,40 @@
 		 */
 		gather_type gather(icontext_type& context, const vertex_type& vertex, edge_type& edge) const {
 
-			float fs = edge.data().s;
-			float fr = edge.data().r;
-			float fa = edge.data().a;
+			double fs = edge.data().s;
+			double fr = edge.data().r;
+			double fa = edge.data().a;
 							
 			int sv = edge.source().data().vertex_id;
 			
-			return set_union_gather(sv, fs, fr, fa, center_msg(sv, edge.data().s + edge.data().a), center_msg(sv, -numeric_limits<float>::max()), std::max(float(0.0), fr),vertex.data().count);
-		
+			return set_union_gather(sv, fs, fr, fa, center_msg(sv, edge.data().s + edge.data().a), center_msg(sv, -numeric_limits<double>::max()), std::max(double(0.0), fr),vertex.data().count);	
 		}
 
 		void apply(icontext_type& context, vertex_type& vertex, 
 			  const gather_type& total) {
 			
 			if (vertex.data().count % 2 == 0) {
-				//cout << "apply 2" << endl;
+					     
 				vertex.data().max_value.target_vertex = total.max.target_vertex;
 				vertex.data().max_value.value = total.max.value;
 
 				vertex.data().sec_max_value.target_vertex = total.sec_max.target_vertex;
 				vertex.data().sec_max_value.value = total.sec_max.value;
-
+				
+				double old_r = vertex.data().r;
 				if (vertex.data().vertex_id == total.max.target_vertex)
 					vertex.data().r = vertex.data().s - total.sec_max.value;
 				else
 					vertex.data().r = vertex.data().s - total.max.value;
-
+				
+				vertex.data().r = (1 - damping) * vertex.data().r + damping * old_r;
+				
 			}else {
-				//cout << "apply 1" << endl;
-				vertex.data().sum_r = total.sum;
+	
+				double old_a = vertex.data().a;
 				vertex.data().a = total.sum;
+				vertex.data().sum_r = total.sum + vertex.data().r;
+				vertex.data().a = (1 - damping) * vertex.data().a + damping * old_a;
 			}
 
 			vertex.data().count += 1;
@@ -257,30 +261,49 @@
 			
 		edge_dir_type scatter_edges(icontext_type& context,
 					    const vertex_type& vertex) const {
-			if (vertex.data().count % 2 == 0)
-				return graphlab:IN_EDGES;
+			if ((vertex.data().count - 1) % 2 == 0)
+				return graphlab::IN_EDGES;
 			
 			return graphlab::OUT_EDGES;		
 		}
 		
 		void scatter(icontext_type& context, const vertex_type& vertex,
 			     edge_type& edge) const {
-					
+			
 			if ((vertex.data().count - 1) % 2 == 0){
-				float old_r = edge.data().r;
-				if (edge.source().data().vertex_id != vertex.data().max_value.target_vertex) {
-					edge.data().r = vertex.data().r - vertex.data().max_value.value;
+				double tmp = vertex.data().a + vertex.data().s;
+				double imax = vertex.data().max_value.value;
+				double isec_max = vertex.data().sec_max_value.value;
+
+				int target = vertex.data().max_value.target_vertex;
+
+				if (tmp > vertex.data().max_value.value){
+
+					target = vertex.data().vertex_id;
+					isec_max = imax;
+					imax = tmp;
+				}
+				if (tmp > isec_max && tmp < imax)
+					isec_max = tmp;
+
+				double old_r = edge.data().r;
+				if (edge.source().data().vertex_id != target) {
+					edge.data().r = edge.data().s - imax;	
 				}
 				else{
-					edge.data().r = vertex.data().r - vertex.data().sec_max_value.value;
+					edge.data().r = edge.data().s - isec_max;
 				}
 			
-				edge_data().r = (1 - damping) * edge_data().r + damping * old_r;
-			}else {
-				float old_a = edge.data().a;
+				edge.data().r = (1 - damping) * edge.data().r + damping * old_r;
 
-				edge.data().a = std::min(float(0.0), vertex.data().r + vertex.data().sum_r - std::max(float(0.0),edge.data().r));
+			}else {
+				double old_a = edge.data().a;
+
+				edge.data().a = std::min(double(0.0), vertex.data().sum_r - std::max(double(0.0),edge.data().r));
+
+
 				edge.data().a = (1 - damping) * edge.data().a + damping * old_a;
+
 			}
 			
 			if (vertex.data().count < MAX_ITER) {
@@ -289,8 +312,11 @@
 				else
 					context.signal(edge.target());
 
+			}else {
 				if (vertex.data().a + vertex.data().r > 0)
+				
 					cout << "examplar: " << vertex.data().vertex_id << endl;
+			
 			}
 				
 		}
@@ -345,7 +371,7 @@ int main(int argc, char** argv) {
 	const std::string description = "Affinity Propagation Clustering";
 	
 	graphlab::command_line_options clopts(description);
-	std::string exec_type = "async";
+	std::string exec_type = "sync";
 	clopts.attach_option("engine", exec_type, "The type of engine to use {async, sync}.");
 
 	std::string saveprefix;
